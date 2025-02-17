@@ -15,31 +15,19 @@
 #include <sys/socket.h>
 #include <arpa/inet.h>
 
-#include <hev-task-call.h>
+#ifdef __MSYS__
+#include <windows.h>
+#endif
 
 #include "hev-conf.h"
 #include "hev-misc.h"
 
 #include "hev-exec.h"
 
-static HevTaskCall call;
-
 static void
 signal_handler (int signum)
 {
     waitpid (-1, NULL, WNOHANG);
-}
-
-static void
-hev_exec_fork (HevTaskCall *call)
-{
-    hev_task_call_set_retval (call, (void *)(intptr_t)fork ());
-}
-
-void
-hev_exec_init (void *stack)
-{
-    call.stack_top = stack;
 }
 
 void
@@ -56,7 +44,6 @@ hev_exec_run (int family, unsigned int maddr[4], unsigned short mport,
     char iaddr[INET6_ADDRSTRLEN];
     char iport[32];
     char ip4p[32];
-    int res;
 
     path = hev_conf_path ();
     signal (SIGCHLD, signal_handler);
@@ -96,21 +83,30 @@ hev_exec_run (int family, unsigned int maddr[4], unsigned short mport,
     }
 
 #ifdef __MSYS__
-    hev_task_call_jump (&call, hev_exec_fork);
-#else
-    hev_exec_fork (&call);
-#endif
+    {
+        char args[1024];
+        HINSTANCE res;
 
-    res = (intptr_t)call.retval;
-    if (res < 0) {
-        LOG (E);
-        return;
-    } else if (res != 0) {
-        return;
+        snprintf (args, sizeof (args) - 1, "/c %s %s %s %s %s %s %s", path,
+                  oaddr, oport, ip4p, iport, mode, iaddr);
+        res = ShellExecuteA (NULL, "open", "cmd.exe", args, NULL, SW_SHOW);
+        if ((INT_PTR)res <= 32)
+            LOGV (E, "%s", "Run script failed.");
     }
+#else
+    {
+        pid_t pid = fork ();
+        if (pid < 0) {
+            LOG (E);
+            return;
+        } else if (pid != 0) {
+            return;
+        }
 
-    execl (path, path, oaddr, oport, ip4p, iport, mode, iaddr, NULL);
+        execl (path, path, oaddr, oport, ip4p, iport, mode, iaddr, NULL);
 
-    LOGV (E, "%s", "Run script failed, Please check is it executable?");
-    exit (-1);
+        LOGV (E, "%s", "Run script failed, Please check is it executable?");
+        exit (-1);
+    }
+#endif
 }
